@@ -13,9 +13,13 @@ const heroTitle = document.querySelector('.hero-title');
 const cursorDot = document.querySelector('.cursor-dot');
 const cursorRing = document.querySelector('.cursor-ring');
 const spotlight = document.querySelector('[data-spotlight]');
+const pageTransition = document.querySelector('.page-transition');
+const transitionCard = document.querySelector('.transition-card');
 
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const isFinePointer = window.matchMedia('(pointer: fine)').matches;
+let isLaunchingProject = false;
+let activeTransitionClone = null;
 
 const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
 const lerp = (start, end, alpha) => start + (end - start) * alpha;
@@ -128,16 +132,69 @@ const setupSkills = () => {
     { threshold: 0.42 }
   );
 
+  // Enhanced radial card 3D interaction
   radialCards.forEach((card) => {
     radialObserver.observe(card);
 
-    card.addEventListener('mouseenter', () => {
-      animateRadialCard(card, false);
-      card.style.transform = 'translateY(-4px) scale(1.025)';
+    const cardState = {
+      currentRotX: 0,
+      currentRotY: 0,
+      targetRotX: 0,
+      targetRotY: 0,
+      hovering: false,
+      rafId: null,
+    };
+
+    const animateCardRotation = () => {
+      cardState.currentRotX = lerp(cardState.currentRotX, cardState.targetRotX, 0.12);
+      cardState.currentRotY = lerp(cardState.currentRotY, cardState.targetRotY, 0.12);
+
+      if (cardState.hovering) {
+        card.style.transform = `
+          rotateX(${cardState.currentRotX.toFixed(2)}deg)
+          rotateY(${cardState.currentRotY.toFixed(2)}deg)
+          translateY(-8px)
+          translateZ(50px)
+          scale(1.05)
+        `;
+      }
+
+      const stillMoving =
+        cardState.hovering ||
+        Math.abs(cardState.currentRotX) > 0.05 ||
+        Math.abs(cardState.currentRotY) > 0.05;
+
+      if (stillMoving) {
+        cardState.rafId = requestAnimationFrame(animateCardRotation);
+      } else {
+        cardState.rafId = null;
+        if (!cardState.hovering) {
+          card.style.transform = '';
+        }
+      }
+    };
+
+    card.addEventListener('mousemove', (e) => {
+      const rect = card.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width - 0.5;
+      const y = (e.clientY - rect.top) / rect.height - 0.5;
+
+      cardState.targetRotY = clamp(x * 10, -10, 10);
+      cardState.targetRotX = clamp(-y * 10, -10, 10);
+      cardState.hovering = true;
+
+      if (!cardState.rafId) {
+        cardState.rafId = requestAnimationFrame(animateCardRotation);
+      }
     });
 
     card.addEventListener('mouseleave', () => {
-      card.style.transform = '';
+      cardState.targetRotX = 0;
+      cardState.targetRotY = 0;
+      cardState.hovering = false;
+      if (!cardState.rafId) {
+        cardState.rafId = requestAnimationFrame(animateCardRotation);
+      }
     });
   });
 
@@ -160,12 +217,32 @@ const setupSkills = () => {
 
   skillFills.forEach((fill) => progressObserver.observe(fill));
 
-  skillRows.forEach((row) => {
-    row.addEventListener('mouseenter', () => {
-      row.style.transform = 'translateY(-2px)';
+  // Enhanced skill row cursor tracking for glow effect
+  if (!prefersReducedMotion) {
+    skillRows.forEach((row) => {
+      row.addEventListener('mousemove', (e) => {
+        const rect = row.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const glowPos = clamp(x * 100, 0, 100);
+        row.style.setProperty('--glow-pos', `${glowPos}%`);
+      });
+
+      row.addEventListener('mouseleave', () => {
+        row.style.setProperty('--glow-pos', '50%');
+      });
     });
-    row.addEventListener('mouseleave', () => {
-      row.style.transform = '';
+  }
+};
+
+const setupCardReveal = () => {
+  projectCards.forEach((card) => {
+    card.addEventListener('click', (event) => {
+      // Don't toggle if clicking interactive elements (buttons or links)
+      if (event.target.closest('.project-btn') || event.target.closest('.project-link')) return;
+      // Don't toggle during page transitions
+      if (document.body.classList.contains('transitioning')) return;
+      // Toggle reveal on mobile/touch devices
+      card.classList.toggle('active');
     });
   });
 };
@@ -184,6 +261,11 @@ const setupTilt = () => {
     };
 
     const animate = () => {
+      if (isLaunchingProject && card.classList.contains('launching')) {
+        state.rafId = null;
+        return;
+      }
+
       state.currentX = lerp(state.currentX, state.targetX, 0.11);
       state.currentY = lerp(state.currentY, state.targetY, 0.11);
 
@@ -205,6 +287,7 @@ const setupTilt = () => {
     };
 
     card.addEventListener('mousemove', (event) => {
+      if (isLaunchingProject) return;
       const rect = card.getBoundingClientRect();
       const x = (event.clientX - rect.left) / rect.width;
       const y = (event.clientY - rect.top) / rect.height;
@@ -231,6 +314,7 @@ const setupMagneticCards = () => {
     card.dataset.magy = '0';
 
     card.addEventListener('mousemove', (event) => {
+      if (isLaunchingProject) return;
       const rect = card.getBoundingClientRect();
       const relX = event.clientX - rect.left;
       const relY = event.clientY - rect.top;
@@ -263,9 +347,9 @@ const setupMagneticCards = () => {
 };
 
 const setupProjectButtons = () => {
-  if (prefersReducedMotion) return;
-
   projectButtons.forEach((button) => {
+    if (prefersReducedMotion) return;
+
     const state = {
       currentX: 0,
       currentY: 0,
@@ -276,6 +360,11 @@ const setupProjectButtons = () => {
     };
 
     const animateButton = () => {
+      if (isLaunchingProject && button.classList.contains('launching')) {
+        state.rafId = null;
+        return;
+      }
+
       state.currentX = lerp(state.currentX, state.targetX, 0.16);
       state.currentY = lerp(state.currentY, state.targetY, 0.16);
 
@@ -291,6 +380,7 @@ const setupProjectButtons = () => {
     };
 
     button.addEventListener('mousemove', (event) => {
+      if (isLaunchingProject) return;
       const rect = button.getBoundingClientRect();
       const relX = event.clientX - rect.left;
       const relY = event.clientY - rect.top;
@@ -328,6 +418,13 @@ const setupProjectButtons = () => {
     button.addEventListener('pointerleave', releaseButton);
 
     button.addEventListener('click', (event) => {
+      event.stopPropagation();
+
+      if (isLaunchingProject) {
+        event.preventDefault();
+        return;
+      }
+
       const rect = button.getBoundingClientRect();
       const ripple = document.createElement('span');
       ripple.className = 'project-btn-ripple';
@@ -335,11 +432,122 @@ const setupProjectButtons = () => {
       ripple.style.top = `${event.clientY - rect.top}px`;
       button.append(ripple);
 
+      const card = button.closest('.project-card');
+      const link = button.getAttribute('href');
+
+      if (!card || !link || !pageTransition || !transitionCard) {
+        button.classList.add('launching');
+        window.setTimeout(() => {
+          ripple.remove();
+          button.classList.remove('launching');
+        }, 620);
+        return;
+      }
+
+      event.preventDefault();
+      isLaunchingProject = true;
+      document.body.classList.add('transition-prep');
+
+      const timing = {
+        preLift: 120,
+        collapseIn: 300,
+        peak: 560,
+        settle: 660,
+        loading: 710,
+        redirect: 820,
+      };
+
       button.classList.add('launching');
+      card.classList.add('launching');
+      card.style.transform = 'scale(1.06) translateZ(80px) rotateX(5deg)';
+
+      const cardRect = card.getBoundingClientRect();
+      const centerX = cardRect.left + cardRect.width / 2;
+      const centerY = cardRect.top + cardRect.height / 2;
+      const targetX = window.innerWidth / 2 - centerX;
+      const targetY = window.innerHeight / 2 - centerY;
+
+      if (activeTransitionClone) {
+        activeTransitionClone.remove();
+        activeTransitionClone = null;
+      }
+
+      const clone = card.cloneNode(true);
+      clone.classList.add('transition-clone');
+      clone.classList.remove('floating', 'delayed', 'launching');
+      const loaderLayer = document.createElement('span');
+      loaderLayer.className = 'transition-clone-loader';
+      clone.append(loaderLayer);
+      clone.style.top = `${cardRect.top}px`;
+      clone.style.left = `${cardRect.left}px`;
+      clone.style.width = `${cardRect.width}px`;
+      clone.style.height = `${cardRect.height}px`;
+      clone.style.transform = 'translate3d(0, 0, 0) scale(1) rotateX(8deg) translateZ(0px)';
+      clone.style.setProperty('--clone-x', `${targetX.toFixed(2)}px`);
+      clone.style.setProperty('--clone-y', `${targetY.toFixed(2)}px`);
+      pageTransition.append(clone);
+      activeTransitionClone = clone;
+
+      card.style.visibility = 'hidden';
+
+      transitionCard.style.width = `${cardRect.width}px`;
+      transitionCard.style.height = `${cardRect.height}px`;
+      transitionCard.style.top = `${centerY}px`;
+      transitionCard.style.left = `${centerX}px`;
+      transitionCard.style.opacity = '0';
+      transitionCard.style.setProperty('--card-edge-blur', '0px');
+      transitionCard.style.transform = 'translate(-50%, -50%) scale(1) rotateX(16deg) translateZ(0px)';
+
+      window.setTimeout(() => {
+        pageTransition.classList.add('active');
+        pageTransition.classList.add('shared-active');
+        document.body.classList.add('transitioning');
+      }, timing.preLift);
+
+      window.setTimeout(() => {
+        pageTransition.classList.add('expanding');
+        if (activeTransitionClone) {
+          activeTransitionClone.style.filter = 'blur(2px)';
+        }
+      }, timing.collapseIn);
+
+      window.setTimeout(() => {
+        pageTransition.classList.add('settled');
+        if (activeTransitionClone) {
+          activeTransitionClone.style.filter = 'blur(0px)';
+        }
+      }, timing.settle);
+
+      window.setTimeout(() => {
+        pageTransition.classList.add('flash');
+      }, timing.peak);
+
+      window.setTimeout(() => {
+        pageTransition.classList.add('loading');
+      }, timing.loading);
+
       window.setTimeout(() => {
         ripple.remove();
-        button.classList.remove('launching');
       }, 620);
+
+      window.setTimeout(() => {
+        window.location.href = link;
+      }, timing.redirect);
+
+      // Fallback cleanup if navigation is interrupted.
+      window.setTimeout(() => {
+        if (!isLaunchingProject) return;
+        isLaunchingProject = false;
+        card.style.visibility = '';
+        card.classList.remove('launching');
+        button.classList.remove('launching');
+        document.body.classList.remove('transition-prep', 'transitioning');
+        pageTransition.classList.remove('active', 'shared-active', 'expanding', 'settled', 'flash', 'loading');
+        if (activeTransitionClone) {
+          activeTransitionClone.remove();
+          activeTransitionClone = null;
+        }
+      }, 1800);
     });
   });
 };
@@ -365,10 +573,10 @@ const setupParallax = () => {
 
     parallaxTargets.forEach((el) => {
       const depth = Number(el.getAttribute('data-parallax')) || 4;
-      const intensity = depth * 0.22;
-      el.style.transform = `translate3d(${(-state.currentX * intensity).toFixed(2)}px, ${(-state.currentY * intensity).toFixed(
-        2
-      )}px, ${Math.min(depth, 12)}px)`;
+      const intensity = depth * 0.36;
+      const x = -state.currentX * intensity;
+      const y = -state.currentY * intensity;
+      el.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, ${(depth * 20).toFixed(2)}px)`;
     });
 
     if (heroTitle) {
@@ -543,6 +751,7 @@ setupSplitHeading();
 setupRevealStagger();
 setupTilt();
 setupMagneticCards();
+setupCardReveal();
 setupProjectButtons();
 setupParallax();
 setupCustomCursorStates();
